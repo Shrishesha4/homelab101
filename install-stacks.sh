@@ -384,10 +384,53 @@ run_compose_for() {
   echo "--- Running in $dir: $compose_cmd up -d ---"
   if [[ $DRY_RUN -eq 1 ]]; then
     echo "DRY-RUN: (cd '$dir' && $compose_cmd up -d)"
-  else
-    (cd "$dir" && $compose_cmd up -d)
+    echo "--- Done: $(basename "$dir") ---"
+    return 0
   fi
-  echo "--- Done: $(basename "$dir") ---"
+
+  # Try running normally and capture output/errors
+  out=""
+  rc=0
+  out=$(cd "$dir" && $compose_cmd up -d 2>&1) || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    echo "$out"
+    echo "--- Done: $(basename "$dir") ---"
+    return 0
+  fi
+
+  # If permission denied to docker socket, try to recover: show diagnostics and retry with newgrp or sudo
+  if echo "$out" | grep -qi "permission denied" || echo "$out" | grep -qi "connect: permission denied"; then
+    error "Permission denied talking to the Docker daemon socket. Trying remedies."
+    echo "Socket ownership:" >&2
+    ls -l /var/run/docker.sock 2>/dev/null || true
+
+    # Try newgrp docker to pick up group membership without requiring logout
+    if command -v newgrp >/dev/null 2>&1; then
+      info "Retrying using 'newgrp docker' to pick up docker group membership for this session..."
+      if newgrp docker -c "cd '$dir' && $compose_cmd up -d" >/dev/null 2>&1; then
+        info "Succeeded with newgrp docker."
+        echo "--- Done: $(basename "$dir") ---"
+        return 0
+      else
+        info "newgrp attempt failed or still lacked permission."
+      fi
+    fi
+
+    # Fallback: run with sudo
+    info "Retrying with sudo..."
+    if sudo bash -c "cd '$dir' && $compose_cmd up -d"; then
+      info "Succeeded with sudo."
+      echo "--- Done: $(basename "$dir") ---"
+      return 0
+    else
+      error "Retry with sudo also failed. Output from first attempt below:\n$out"
+      return 1
+    fi
+  else
+    # Not a permission error; print output and return failure
+    echo "$out" >&2
+    return $rc
+  fi
 }
 
 main() {
