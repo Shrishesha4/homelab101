@@ -1,0 +1,160 @@
+services:
+  nextexplorer:
+    image: nxzai/explorer:latest
+    container_name: nextexplorer
+    restart: unless-stopped
+    ports:
+      - 3002:3000
+    environment:
+      - NODE_ENV=production
+      - PUBLIC_URL=http://localhost:3002
+      - LOG_LEVEL=info
+    volumes:
+      - /home/shrishesha/servar-config/tools/nextexplorer/cache:/cache
+      - /home/shrishesha:/mnt/Shrishesha
+      - /servarr:/mnt/Media
+      - /mnt/hardboi:/mnt/HardDrive
+      - /mnt/solidboi:/mnt/SSD
+
+  dockpeek:
+    image: dockpeek/dockpeek:latest
+    container_name: dockpeek
+    restart: unless-stopped
+    ports:
+      - "3420:8000"
+    environment:
+      - SECRET_KEY=vvst007@CMR10
+      - USERNAME=Shrishesha
+      - PASSWORD=Shrishesha@4
+
+      # --- Docker Host 1 (Local) ---
+      - DOCKER_HOST_1_URL=unix:///var/run/docker.sock # Local Docker socket
+      # DOCKER_HOST_1_NAME= is Optional: Auto-detected from Docker API if not set
+      # DOCKER_HOST_1_PUBLIC_HOSTNAME= is optional; uses host IP by default
+
+      # --- Docker Host 2 (Remote Server) ---
+      # - DOCKER_HOST_2_URL=tcp://10.0.0.6:2375 # Remote socket proxy
+      # - DOCKER_HOST_2_NAME=Strix # Optional: Auto-detected from Docker API if not set
+      # - DOCKER_HOST_2_PUBLIC_HOSTNAME=server.local # Optional: Custom hostname for links
+
+      # --- Docker Host 3 (Tailscale) ---
+      - DOCKER_HOST_3_URL=tcp://10.0.0.2:2375 # Tailscale IP
+      - DOCKER_HOST_3_NAME=Pi # Optional: Auto-detected from Docker API if not set
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  filebrowser:
+    image: hurlenko/filebrowser:latest
+    container_name: filebrowser
+    restart: unless-stopped
+    user: "1000:1000"
+    volumes:
+      - /home:/data
+      - /servarr:/data/Servarr
+      - /home/shrishesha/servar-config/tools/filebrowser/config:/config
+    ports:
+      - 8095:8080
+
+  it-tools:
+    image: "corentinth/it-tools:latest"
+    ports:
+      - "8091:80"
+    restart: unless-stopped
+    container_name: it-tools
+
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    command:
+      - serve
+    environment:
+      - TZ=Asia/Kolkata
+    user: 1000:1000
+    volumes:
+      - /home/shrishesha/servar-config/tools/ntfy/ntfy-cache:/var/cache/ntfy
+      - /home/shrishesha/servar-config/tools/ntfy:/etc/ntfy
+    ports:
+      - 7200:80
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --tries=1 http://localhost:80/v1/health -O - | grep -Eo '\"healthy\"\\s*:\\s*true' || exit 1",
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  glance:
+    container_name: glance
+    image: glanceapp/glance:latest
+    restart: unless-stopped
+    ports:
+      - 4404:8080
+    volumes:
+      - /home/shrishesha/servar-config/tools/glance/config:/app/config
+      # - /mnt/solidboi:/mnt/ssd
+      # - /mnt/hardboi:/mnt/hdd
+      - /home/shrishesha/servar-config/tools/glance/assets:/app/assets
+      - /etc/localtime:/etc/localtime:ro
+      # Optionally, also mount docker socket if you want to use the docker containers widget
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - 4444:3000
+    volumes:
+      - /home/shrishesha/servar-config/tools/homepage:/app/config
+      - /servarr:/servarr:ro
+      - /mnt/hardboi:/hardboi:ro
+      - /mnt/solidboi:/solidboi:ro
+      - /home:/home:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - HOMEPAGE_ALLOWED_HOSTS=yourdomain.com
+      - TZ=Asia/Kolkata
+      - PUID=1000
+      - PGID=1000
+
+  code-server:
+    image: lscr.io/linuxserver/code-server:latest
+    container_name: code-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+      - HASHED_PASSWORD=yourhashedpasswordhere
+      - SUDO_PASSWORD_HASH=yourhashedpasswordhere
+      - PROXY_DOMAIN=code.yourdomain.com
+      - DEFAULT_WORKSPACE=/development/code
+      - PWA_APPNAME=code
+    volumes:
+      - /home/shrishesha/servar-config/tools/code-server/config:/config
+      - /home/shrishesha:/servarr-configs
+      - /home/shrishesha/dev:/development
+    ports:
+      - 8443:8443
+    restart: unless-stopped
+
+  glances:
+    container_name: glances
+    image: nicolargo/glances:latest
+    ports:
+      - 7300:61208
+    environment:
+      - TZ=Asia/Kolkata
+      - GLANCES_OPT=-w -C /glances/conf/glances.conf
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - /home/shrishesha/servar-config/tools/glances/glances.conf:/glances/conf/glances.conf:ro
+      - /mnt/home:/nvme:ro
+      - /mnt/solidboi:/solidboi:ro
+      - /mnt/hardboi:/hardboi:ro
+      - /servarr:/servarr:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro

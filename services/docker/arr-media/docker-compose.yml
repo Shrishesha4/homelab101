@@ -1,0 +1,117 @@
+services:
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /home/shrishesha/servar-config/arr-stack/radarr:/config
+      - /home/shrishesha/library:/nvme-media
+      - /home/shrishesha/downloads:/downloads
+      - /servarr/Media:/media
+    ports:
+      - 7878:7878
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /home/shrishesha/servar-config/arr-stack/sonarr:/config
+      - /home/shrishesha/downloads:/downloads
+      - /home/shrishesha/library:/nvme-media
+      - /servarr/Media:/media
+    ports:
+      - 8989:8989
+
+  lidarr:
+    image: lscr.io/linuxserver/lidarr:latest
+    container_name: lidarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    volumes:
+      - /home/shrishesha/servar-config/arr-stack/lidarr/config:/config
+      - /servarr/Media:/servarr 
+      - /home/shrishesha/downloads:/downloads 
+    ports:
+      - 8686:8686
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    ports:
+      - 9696:9696
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /home/shrishesha/servar-config/arr-stack/prowlarr:/config
+    restart: unless-stopped
+
+  profilarr:
+    image: santiagosayshey/profilarr:latest
+    container_name: profilarr
+    ports:
+      - 6868:6868
+    volumes:
+      - /home/shrishesha/servar-config/arr-stack/profilarr/data:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    restart: unless-stopped
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /home/shrishesha/servar-config/arr-stack/bazarr:/config
+      - /home/shrishesha/library:/nvme-media
+      - /servarr/Media:/media
+    ports:
+      - 6767:6767
+
+  jellyseerr:
+    container_name: jellyseerr
+    image: fallenbagel/jellyseerr:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    volumes:
+      - /home/shrishesha/servar-config/arr-stack/jellyseerr:/app/config
+    ports:
+      - 5055:5055
+    restart: unless-stopped
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_HTML=${LOG_HTML:-false}
+      - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}
+      - TZ=Asia/Kolkata
+    ports:
+      - "${PORT:-8191}:8191"
+    restart: unless-stopped  

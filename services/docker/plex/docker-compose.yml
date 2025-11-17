@@ -1,0 +1,38 @@
+services:
+  plex:
+    container_name: plex
+    image: plexinc/pms-docker
+    restart: unless-stopped
+    ports:
+      - 32400:32400/tcp
+      - 8324:8324/tcp
+      - 32469:32469/tcp
+      - 1900:1900/udp
+      - 32410:32410/udp
+      - 32412:32412/udp
+      - 32413:32413/udp
+      - 32414:32414/udp
+    environment:
+      - TZ=Asia/Kolkata
+      - PLEX_CLAIM=claim-your-plex-claim-code-here
+      - PUID=1000
+      - PGID=1000
+      - ADVERTISE_IP=http://localhost:32400/
+    hostname: servarr
+    volumes:
+      - /home/shrishesha/servar-config/plex/library:/config
+      - /servarr/Media:/media1
+      - /home/shrishesha/library:/media2
+
+  tautulli:
+    image: ghcr.io/tautulli/tautulli
+    container_name: tautulli
+    restart: unless-stopped
+    volumes:
+      - /home/shrishesha/servar-config/tautulli/config:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Kolkata
+    ports:
+      - 8181:8181

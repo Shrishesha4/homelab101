@@ -1,0 +1,15 @@
+services:
+  app:
+    container_name: nginx
+    image: 'jc21/nginx-proxy-manager:latest'
+    restart: always
+    ports:
+      - '80:80'
+      - '81:81'
+      - '443:443'
+    environment:
+      DISABLE_IPV6: 'true'
+
+    volumes:
+      - /home/shrishesha/servar-config/ngnix/data:/data
+      - /home/shrishesha/servar-config/ngnix/letsencrypt:/etc/letsencrypt

@@ -1,0 +1,33 @@
+services:
+  jellyfin:
+      image: jellyfin/jellyfin:latest
+      container_name: jellyfin
+      environment:
+        - PUID=1000
+        - PGID=1000
+        - TZ=Asia/Kolkata
+      devices:
+        - /dev/dri:/dev/dri
+      volumes:
+        - /home/shrishesha/servar-config/jellyfin/library:/config
+        - /servarr/Media:/media1
+        - /home/shrishesha/library/:/media2
+        - /opt/vc/lib:/opt/vc/lib
+      ports:
+        - 1901:1900/udp
+        - 8096:8096
+        - 8920:8920
+        - 7359:7359/udp
+      restart: unless-stopped
+
+  jfa-go:
+    image: hrfee/jfa-go:latest
+    container_name: jfa-go
+    ports:
+      - "8056:8056"
+    volumes:
+      - /home/shrishesha/servar-config/jfago/config:/config
+    environment:
+      - JELLYFIN_URL=http://localhost:8096
+      - JELLYFIN_API_KEY=5afca3c1c2084cd5bb2f6c139a2700fa
+    restart: unless-stopped

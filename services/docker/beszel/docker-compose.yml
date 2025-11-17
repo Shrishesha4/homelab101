@@ -1,0 +1,11 @@
+services:
+  beszel:
+        image: henrygd/beszel:latest
+        container_name: beszel
+        restart: unless-stopped
+        ports:
+          - 8090:8090
+        volumes:
+          - /home/shrishesha/servar-config/tools/beszel/beszel_data:/beszel_data
+          - /home/shrishesha/servar-config/tools/beszel/beszel_socket:/beszel_socket
+        
