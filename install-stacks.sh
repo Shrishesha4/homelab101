@@ -17,10 +17,12 @@ TIMEOUT_DOCKER_START=180
 usage() {
   cat <<EOF
 Usage: $0 [--all|-a] [--yes|-y] [--help|-h]
+  [--dry-run|-n]
 
 Options:
   -a, --all    Select and install all stacks automatically (non-interactive)
   -y, --yes    Auto-confirm prompts (useful with --all)
+  -n, --dry-run  Show what would be done but don't execute commands
   -h, --help   Show this help and exit
 
 This script will:
@@ -35,10 +37,12 @@ EOF
 # Parse args
 AUTO_ALL=0
 ASSUME_YES=0
+DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -a|--all) AUTO_ALL=1; shift ;;
     -y|--yes) ASSUME_YES=1; shift ;;
+    -n|--dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1"; usage; exit 2 ;;
   esac
@@ -46,6 +50,10 @@ done
 
 confirm() {
   if [[ $ASSUME_YES -eq 1 ]]; then
+    return 0
+  fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    # In dry-run mode, auto-confirm but still don't execute actions.
     return 0
   fi
   local prompt="$1"
@@ -86,15 +94,79 @@ install_docker_macos() {
       error "User declined Docker installation. Exiting."
       exit 1
     fi
-    brew install --cask docker
+    if [[ $DRY_RUN -eq 1 ]]; then
+      echo "DRY-RUN: brew install --cask docker"
+    else
+      brew install --cask docker
+    fi
   fi
   info "Opening Docker.app to start the Docker engine — you may be prompted for permissions."
-  open -a Docker || true
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "DRY-RUN: open -a Docker"
+  else
+    open -a Docker || true
+  fi
   info "Waiting up to ${TIMEOUT_DOCKER_START}s for Docker to become available..."
   local waited=0
   while ! docker info >/dev/null 2>&1; do
     if (( waited >= TIMEOUT_DOCKER_START )); then
       error "Timed out waiting for Docker to start. Check Docker Desktop and try again."
+      exit 1
+    fi
+    sleep 2
+    (( waited += 2 ))
+  done
+  info "Docker is available."
+}
+
+install_docker_linux() {
+  info "Installing Docker Engine on Linux (APT/Debian/Ubuntu path)..."
+  if ! command -v apt-get >/dev/null 2>&1; then
+    error "Automatic Linux install currently only supports apt-based systems (Ubuntu/Debian)."
+    exit 1
+  fi
+
+  if ! confirm "Proceed to install Docker Engine on this machine?"; then
+    error "User declined Docker installation. Exiting."
+    exit 1
+  fi
+
+  # Commands to run
+  cmds=(
+    "sudo apt-get update"
+    "sudo apt-get install -y ca-certificates curl gnupg lsb-release"
+    "curl -fsSL https://download.docker.com/linux/$(. /etc/os-release && echo \"$ID\")/gpg | sudo gpg --dearmour -o /usr/share/keyrings/docker-archive-keyring.gpg"
+    "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/$(. /etc/os-release && echo \"$ID\") $(lsb_release -cs) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null"
+    "sudo apt-get update"
+    "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin"
+    "sudo systemctl enable --now docker"
+  )
+
+  for c in "${cmds[@]}"; do
+    if [[ $DRY_RUN -eq 1 ]]; then
+      echo "DRY-RUN: $c"
+    else
+      eval "$c"
+    fi
+  done
+
+  # Add user to docker group so they can run without sudo
+  target_user="${SUDO_USER:-${USER:-$(whoami)}}"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "DRY-RUN: sudo groupadd docker || true"
+    echo "DRY-RUN: sudo usermod -aG docker $target_user"
+  else
+    sudo groupadd docker || true
+    sudo usermod -aG docker "$target_user" || true
+    info "Added $target_user to 'docker' group. You may need to log out and back in for this to take effect."
+  fi
+
+  # Wait for docker
+  info "Waiting up to ${TIMEOUT_DOCKER_START}s for Docker to become available..."
+  local waited=0
+  while ! docker info >/dev/null 2>&1; do
+    if (( waited >= TIMEOUT_DOCKER_START )); then
+      error "Timed out waiting for Docker to start. Check service status and try again."
       exit 1
     fi
     sleep 2
@@ -115,15 +187,26 @@ ensure_docker() {
   else
     info "Docker CLI not found."
   fi
-
-  # Only implement macOS installer path (user's environment: macOS)
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    install_docker_macos
+  if [[ $DRY_RUN -eq 1 ]]; then
+    info "DRY-RUN: Docker not available (would install but not executing in dry-run)."
     return 0
-  else
-    error "This installer currently supports automatic Docker installation only on macOS."
-    exit 1
   fi
+
+  case "$(uname -s)" in
+    Darwin)
+      install_docker_macos
+      return 0
+      ;;
+    Linux)
+      # Try apt-based install for Ubuntu/Debian
+      install_docker_linux
+      return 0
+      ;;
+    *)
+      error "This installer supports automatic Docker installation only on macOS and Debian/Ubuntu Linux."
+      exit 1
+      ;;
+  esac
 }
 
 choose_compose_command() {
@@ -146,45 +229,61 @@ list_service_dirs() {
     arr+=("$d")
   done < <(find "$SERVICES_DIR" -maxdepth 1 -mindepth 1 -type d -print0 | sort -z)
 
-  echo "${arr[@]}"
+  # Print one directory per line to be portable across bash versions
+  for d in "${arr[@]}"; do
+    printf '%s\n' "$d"
+  done
 }
 
 prompt_selection() {
-  local -n _out=$1
-  mapfile -t dirs < <(list_service_dirs)
+  # Prints selected directories (one per line) to stdout.
+  # Caller should capture output into an array.
+  dirs=()
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    dirs+=("$line")
+  done < <(list_service_dirs)
+
   if [[ ${#dirs[@]} -eq 0 ]]; then
     error "No service directories found in $SERVICES_DIR"
     exit 1
   fi
 
-  echo "Found the following stacks in $SERVICES_DIR:"
-  local i=1
-  for d in "${dirs[@]}"; do
-    printf "  %2d) %s\n" "$i" "$(basename "$d")"
-    ((i++))
-  done
-  echo "   0) All"
-
   if [[ $AUTO_ALL -eq 1 ]]; then
-    _out=("${dirs[@]}")
+    for d in "${dirs[@]}"; do
+      printf '%s\n' "$d"
+    done
     return 0
   fi
 
-  echo
-  echo "Enter a selection: a single number (e.g. 2), comma-separated (1,3), ranges (1-3), '0' for all, or 'q' to quit."
-  read -r -p "Selection: " sel
+  # Print interactive menu to stderr so callers can capture stdout safely
+  echo "Found the following stacks in $SERVICES_DIR:" >&2
+  i=1
+  for d in "${dirs[@]}"; do
+    printf "  %2d) %s\n" "$i" "$(basename "$d")" >&2
+    i=$((i+1))
+  done
+  echo "   0) All" >&2
+
+  echo >&2
+  echo "Enter a selection: a single number (e.g. 2), comma-separated (1,3), ranges (1-3), '0' for all, or 'q' to quit." >&2
+  printf "Selection: " >&2
+  read -r sel
   if [[ "$sel" == "q" || "$sel" == "Q" ]]; then
-    echo "Aborted by user."; exit 0
+    echo "Aborted by user." >&2
+    exit 0
   fi
 
   if [[ "$sel" =~ ^[[:space:]]*0[[:space:]]*$ || "$sel" =~ ^[Aa]ll$ || "$sel" =~ ^[Aa]$ ]]; then
-    _out=("${dirs[@]}")
+    for d in "${dirs[@]}"; do
+      printf '%s\n' "$d"
+    done
     return 0
   fi
 
-  # parse selections
+  # parse selections (comma separated, ranges allowed)
   IFS=',' read -ra parts <<< "$sel"
-  local chosen=()
+  chosen=()
   for p in "${parts[@]}"; do
     p="${p// /}"
     if [[ "$p" =~ ^([0-9]+)-([0-9]+)$ ]]; then
@@ -201,23 +300,31 @@ prompt_selection() {
       if (( idx >= 0 && idx < ${#dirs[@]} )); then
         chosen+=("${dirs[$idx]}")
       else
-        echo "Warning: ignoring invalid selection: $p"
+        echo "Warning: ignoring invalid selection: $p" >&2
       fi
     else
-      echo "Warning: ignoring unknown token: $p"
+      echo "Warning: ignoring unknown token: $p" >&2
     fi
   done
 
-  # deduplicate preserve order
-  local -A seen=()
-  local final=()
+  # deduplicate while preserving order (portable)
+  final=()
   for d in "${chosen[@]}"; do
-    if [[ -z "${seen[$d]:-}" ]]; then
-      seen[$d]=1
+    skip=0
+    for e in "${final[@]}"; do
+      if [[ "$e" == "$d" ]]; then
+        skip=1
+        break
+      fi
+    done
+    if [[ $skip -eq 0 ]]; then
       final+=("$d")
     fi
   done
-  _out=("${final[@]}")
+
+  for d in "${final[@]}"; do
+    printf '%s\n' "$d"
+  done
 }
 
 run_compose_for() {
@@ -237,15 +344,22 @@ run_compose_for() {
 
   echo
   echo "--- Running in $dir: $compose_cmd up -d ---"
-  (cd "$dir" && $compose_cmd up -d)
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "DRY-RUN: (cd '$dir' && $compose_cmd up -d)"
+  else
+    (cd "$dir" && $compose_cmd up -d)
+  fi
   echo "--- Done: $(basename "$dir") ---"
 }
 
 main() {
   ensure_docker
 
-  mapfile -t selected_dirs
-  prompt_selection selected_dirs
+  selected_dirs=()
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    selected_dirs+=("$line")
+  done < <(prompt_selection)
 
   if [[ ${#selected_dirs[@]} -eq 0 ]]; then
     info "No stacks selected. Exiting."
