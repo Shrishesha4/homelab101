@@ -216,29 +216,100 @@ install_docker_linux() {
 ensure_docker() {
   if command -v docker >/dev/null 2>&1; then
     info "Docker CLI found. Verifying it can talk to the daemon..."
-    if docker info >/dev/null 2>&1; then
+    # Capture output to distinguish permission errors from daemon-not-running
+    docker_out=""
+    if docker_out=$(docker info 2>&1); then
       info "Docker daemon is running."
       return 0
     else
-      info "Docker CLI found but daemon isn't responding."
+      # docker info failed; examine output
+      if echo "$docker_out" | grep -qi "permission denied" || echo "$docker_out" | grep -qi "connect: permission denied"; then
+        error "Docker CLI cannot access the daemon socket: permission denied."
+        ls -l /var/run/docker.sock 2>/dev/null || true
+        echo
+        echo "You can try one of the following:
+  - Run the command with sudo (e.g. 'sudo ./install-stacks.sh')
+  - Re-login or run 'newgrp docker' to pick up docker group membership
+  - Ensure your user is in the 'docker' group (sudo usermod -aG docker <user>) and then re-login
+"
+        if [[ $ASSUME_YES -eq 1 ]]; then
+          info "ASSUME_YES set: attempting 'newgrp docker' to pick up group membership for this run..."
+          if command -v newgrp >/dev/null 2>&1; then
+            if newgrp docker -c "docker info" >/dev/null 2>&1; then
+              info "Succeeded after newgrp."
+              return 0
+            else
+              info "newgrp did not allow access. You may need to re-login or run with sudo."
+            fi
+          fi
+        fi
+        exit 1
+      else
+        info "Docker CLI found but daemon isn't responding."
+      fi
     fi
   else
     info "Docker CLI not found."
   fi
+
   if [[ $DRY_RUN -eq 1 ]]; then
     info "DRY-RUN: Docker not available (would install but not executing in dry-run)."
     return 0
   fi
 
+  # At this point docker command is missing or docker daemon not responding.
   case "$(uname -s)" in
     Darwin)
       install_docker_macos
       return 0
       ;;
     Linux)
-      # Try apt-based install for Ubuntu/Debian
-      install_docker_linux
-      return 0
+      # If systemd is present and docker.service exists, try to start it first instead of reinstalling
+      if command -v systemctl >/dev/null 2>&1; then
+        if systemctl list-unit-files | grep -q '^docker.service' || systemctl status docker >/dev/null 2>&1 || systemctl status docker 2>&1 | grep -q 'Loaded: not-found'; then
+          info "Docker systemd unit appears present. Attempting to start docker.service."
+          if ! confirm "Start docker.service now?"; then
+            error "User declined to start docker.service. Exiting."
+            exit 1
+          fi
+          if [[ $DRY_RUN -eq 1 ]]; then
+            echo "DRY-RUN: sudo systemctl start docker"
+            return 0
+          else
+            sudo systemctl start docker || true
+          fi
+
+          # Wait for docker to become available (reuse logic from install path)
+          info "Waiting up to ${TIMEOUT_DOCKER_START}s for Docker to become available..."
+          waited=0
+          while true; do
+            if sudo docker info >/dev/null 2>&1; then
+              info "Docker is available."
+              return 0
+            fi
+            if systemctl is-failed --quiet docker; then
+              error "docker.service failed to start. Showing logs:" 
+              sudo journalctl -u docker --no-pager -n 200 || true
+              exit 1
+            fi
+            if (( waited >= TIMEOUT_DOCKER_START )); then
+              error "Timed out waiting for Docker to start."
+              sudo journalctl -u docker --no-pager -n 200 || true
+              exit 1
+            fi
+            sleep 2
+            (( waited += 2 ))
+          done
+        else
+          # systemd present but docker unit not found: fall back to install
+          install_docker_linux
+          return 0
+        fi
+      else
+        # No systemctl: fall back to install path
+        install_docker_linux
+        return 0
+      fi
       ;;
     *)
       error "This installer supports automatic Docker installation only on macOS and Debian/Ubuntu Linux."
