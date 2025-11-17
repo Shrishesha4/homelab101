@@ -13,6 +13,9 @@ set -o nounset
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICES_DIR="$BASE_DIR/services/docker"
 TIMEOUT_DOCKER_START=180
+# Retry behavior for network pulls
+RETRY_COUNT=3
+RETRY_BACKOFF_BASE=5
 
 usage() {
   cat <<EOF
@@ -459,18 +462,49 @@ run_compose_for() {
     return 0
   fi
 
-  # Try running normally and capture output/errors
+  # Attempt the compose command with retries for transient network errors (pull timeouts)
+  attempt=1
   out=""
   rc=0
-  out=$(cd "$dir" && $compose_cmd up -d 2>&1) || rc=$?
-  if [[ $rc -eq 0 ]]; then
-    echo "$out"
-    echo "--- Done: $(basename "$dir") ---"
-    return 0
-  fi
+  network_error=0
+  permission_error=0
+  while (( attempt <= RETRY_COUNT )); do
+    out=""
+    rc=0
+    out=$(cd "$dir" && $compose_cmd up -d 2>&1) || rc=$?
+    if [[ $rc -eq 0 ]]; then
+      echo "$out"
+      echo "--- Done: $(basename "$dir") ---"
+      return 0
+    fi
 
-  # If permission denied to docker socket, try to recover: show diagnostics and retry with newgrp or sudo
-  if echo "$out" | grep -qi "permission denied" || echo "$out" | grep -qi "connect: permission denied"; then
+    # Detect permission denied vs network-related pull timeout errors
+    if echo "$out" | grep -qi "permission denied" || echo "$out" | grep -qi "connect: permission denied"; then
+      permission_error=1
+      break
+    fi
+
+    if echo "$out" | grep -Ei "i/o timeout|failed to copy|httpReadSeeker|TLS handshake timeout|dial tcp .*:443: i/o timeout|manifest" >/dev/null 2>&1; then
+      network_error=1
+      if (( attempt < RETRY_COUNT )); then
+        wait_s=$((RETRY_BACKOFF_BASE * attempt))
+        info "Network error detected pulling images (attempt ${attempt}/${RETRY_COUNT}). Retrying in ${wait_s}s..."
+        sleep "$wait_s"
+        attempt=$((attempt+1))
+        continue
+      else
+        info "Network error detected and retry limit reached (${RETRY_COUNT})."
+        break
+      fi
+    fi
+
+    # Not a network or permission error: bail out and print output
+    echo "$out" >&2
+    return $rc
+  done
+
+  # Handle permission error remediation if detected
+  if [[ $permission_error -eq 1 ]]; then
     error "Permission denied talking to the Docker daemon socket. Trying remedies."
     echo "Socket ownership:" >&2
     ls -l /var/run/docker.sock 2>/dev/null || true
@@ -497,11 +531,18 @@ run_compose_for() {
       error "Retry with sudo also failed. Output from first attempt below:\n$out"
       return 1
     fi
-  else
-    # Not a permission error; print output and return failure
-    echo "$out" >&2
-    return $rc
   fi
+
+  # If network_error was set and we exhausted retries, print the last output and fail
+  if [[ $network_error -eq 1 ]]; then
+    echo "$out" >&2
+    error "Image pull failed after ${RETRY_COUNT} attempts due to network errors. Consider checking network connectivity or trying again later."
+    return 1
+  fi
+
+  # Fallback: return the last rc and output
+  echo "$out" >&2
+  return $rc
 }
 
 main() {
