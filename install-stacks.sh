@@ -161,18 +161,56 @@ install_docker_linux() {
     info "Added $target_user to 'docker' group. You may need to log out and back in for this to take effect."
   fi
 
-  # Wait for docker
+  # Wait for docker, but check systemd service status to fail fast with diagnostics
   info "Waiting up to ${TIMEOUT_DOCKER_START}s for Docker to become available..."
   local waited=0
-  while ! docker info >/dev/null 2>&1; do
+  local tried_start=0
+  while true; do
+    # Use sudo docker info to bypass group membership propagation delays
+    if sudo docker info >/dev/null 2>&1; then
+      info "Docker is available."
+      break
+    fi
+
+    # Check systemd service status if available
+    if command -v systemctl >/dev/null 2>&1; then
+      if systemctl is-active --quiet docker; then
+        # service active but docker info still failing; keep waiting
+        :
+      elif systemctl is-failed --quiet docker; then
+        error "docker.service has failed. Showing recent logs to help debugging:" 
+        if command -v journalctl >/dev/null 2>&1; then
+          echo "--- docker.service logs (last 200 lines) ---"
+          sudo journalctl -u docker --no-pager -n 200 || true
+        fi
+        error "docker.service failed to start. Inspect the logs above and run 'sudo systemctl status docker' or check '/var/log/syslog' depending on your distro."
+        exit 1
+      else
+        # service not active; try to start it once
+        if (( tried_start == 0 )); then
+          info "Attempting to start docker.service..."
+          if [[ $DRY_RUN -eq 1 ]]; then
+            echo "DRY-RUN: sudo systemctl start docker"
+          else
+            sudo systemctl start docker || true
+          fi
+          tried_start=1
+        fi
+      fi
+    fi
+
     if (( waited >= TIMEOUT_DOCKER_START )); then
-      error "Timed out waiting for Docker to start. Check service status and try again."
+      error "Timed out waiting for Docker to start. Check service status and logs."
+      if command -v journalctl >/dev/null 2>&1; then
+        echo "--- docker.service logs (last 200 lines) ---"
+        sudo journalctl -u docker --no-pager -n 200 || true
+      fi
       exit 1
     fi
+
     sleep 2
     (( waited += 2 ))
   done
-  info "Docker is available."
 }
 
 ensure_docker() {
